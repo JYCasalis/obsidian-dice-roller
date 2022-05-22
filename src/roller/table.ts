@@ -12,6 +12,8 @@ export class TableRoller extends GenericFileRoller<string> {
     isLookup: any;
     lookupRoller: StackRoller;
     lookupRanges: [range: [min: number, max: number], option: string][];
+    nestedTooltip: string;
+    rolledRowNumbers: string;
     getPath() {
         const { groups } = this.lexeme.value.match(TABLE_REGEX);
 
@@ -27,22 +29,96 @@ export class TableRoller extends GenericFileRoller<string> {
         this.header = header;
     }
     get tooltip() {
-        return `${this.original}\n${this.path} > ${this.block}${
-            this.header ? " | " + this.header : ""
-        }`;
+        return `${this.original}\n${this.nestedTooltip}${this.header ? " | " + this.header : ""}`;
     }
     get replacer() {
         return this.result;
     }
     result: string;
     async build() {
-        this.resultEl.empty();
-        const result = [this.result];
+        console.log("***** Entering TableRoller build with result:", this.result, "*****");
 
+        if (this.lookupRoller) {
+            this.nestedTooltip = "[" + this.lookupRoller.result + "^" + this.block + "] > ";
+        }
+        else {
+            this.nestedTooltip = "[row " + this.rolledRowNumbers + "] > ";
+        }
+
+        let rollerPattern = /(?:\`dice:)(.*?)(?:\`)/;
+        let foundRoller;
+
+        let i = 0;
+
+        while ((foundRoller = this.result.match(rollerPattern)) != null) {
+            console.log("Processing formula #", i, ":", foundRoller[1]);
+            console.log("----------------------");
+
+            const formula = foundRoller[1].trim();
+            console.log("Found a diceroller formula:", formula);
+
+            // Create a sub roller
+            const subRoller = await this.plugin.getRoller(formula, this.source);    // JYC - Do we need this.source ????
+            console.log("Sub roller created, let's roll it");
+
+            const rolled = await subRoller.roll();
+            const subResult = subRoller.result;
+
+            // UPDATE TOOLTIP
+            if (subRoller instanceof TableRoller) {
+                this.nestedTooltip += subRoller.nestedTooltip;
+
+                if (!rolled.match(rollerPattern)) {
+                    this.nestedTooltip += " , ";
+                }
+                console.log("TOOLTIP TableRoller updated:", this.nestedTooltip);
+            }
+            else if (subRoller instanceof StackRoller) {
+                console.log("TOOLTIP for STACK ROLLER. resultText:", subRoller.resultText," vs result:", subRoller.result);
+                if (i == 0) {
+                    this.nestedTooltip += subRoller.resultText;
+                }
+                else {
+                    this.nestedTooltip += " , " + subRoller.resultText;
+                }
+                console.log("TOOLTIP StackRoller updated:", this.nestedTooltip);
+            }
+            else {
+                if (i == 0) {
+                    this.nestedTooltip += subRoller.result;
+                }
+                else {
+                    this.nestedTooltip += " , " + subRoller.result;
+                }
+                console.log("TOOLTIP OTHER Roller updated:", this.nestedTooltip);
+            }
+            // END UPDATE TOOLTIP
+
+            console.log("Updated result from", this.result, "to", this.result.replace(foundRoller[0], subResult));
+            this.result = this.result.replace(foundRoller[0], subResult);
+
+            i++;
+            if (i > 10) {
+                console.log("EMERGENCY BREAK....");
+                break;
+            }
+        };
+
+        this.nestedTooltip = this.nestedTooltip.replace(/( > $)/, '');
+        this.nestedTooltip = this.nestedTooltip.replace(/( , $)/, '');
+
+        console.log("=============================");
+        console.log("FINAL RESULT is:", this.result);
+        console.log("FINAL TOOLTIP is:", this.nestedTooltip);
+        console.log("=============================");
+
+        this.setTooltip();
+
+        this.resultEl.empty();
+        let result = [this.result];
         if (this.plugin.data.displayResultsInline) {
             result.unshift(this.inlineText);
         }
-
         MarkdownRenderer.renderMarkdown(
             result.join(""),
             this.resultEl.createSpan("embedded-table-result"),
@@ -50,6 +126,7 @@ export class TableRoller extends GenericFileRoller<string> {
             null
         );
     }
+
     async getResult() {
         if (this.isLookup) {
             const result = await this.lookupRoller.roll();
@@ -63,15 +140,19 @@ export class TableRoller extends GenericFileRoller<string> {
             }
         }
         const options = [...this.options];
-
-        return [...Array(this.rolls)]
+        let randomRows: string[] = [];
+        let res = [...Array(this.rolls)]
             .map(() => {
-                let option =
-                    options[this.getRandomBetween(0, options.length - 1)];
+                const randomRowNumber = this.getRandomBetween(0, options.length - 1);
+                randomRows.push((randomRowNumber+1).toString());
+                let option = options[randomRowNumber];
                 options.splice(options.indexOf(option), 1);
                 return option;
             })
             .join("||");
+        this.rolledRowNumbers = randomRows.join("||");
+
+        return res;
     }
     async roll(): Promise<string> {
         return new Promise(async (resolve) => {
@@ -96,6 +177,7 @@ export class TableRoller extends GenericFileRoller<string> {
     }
     async load() {
         await this.getOptions();
+        this.trigger("loaded"); // JYC - Moved from getOptions
     }
 
     async getOptions() {
@@ -130,13 +212,15 @@ export class TableRoller extends GenericFileRoller<string> {
                 Object.keys(table.columns).length === 2 &&
                 /dice:\s*([\s\S]+)\s*?/.test(Object.keys(table.columns)[0])
             ) {
-                const roller = this.plugin.getRoller(
+                console.log("JYC - from getOptions Lookup Table >>>> call getRoller for", Object.keys(table.columns)[0].split(":").pop());
+                const roller = await this.plugin.getRoller( // JYC
                     Object.keys(table.columns)[0].split(":").pop(),
                     this.source
                 );
                 if (roller instanceof StackRoller) {
                     this.lookupRoller = roller;
-                    await this.lookupRoller.roll();
+                    // TODO JYC: useless roll I think
+                    // let result = await this.lookupRoller.roll();
 
                     this.lookupRanges = table.rows.map((row) => {
                         const [range, option] = row
@@ -170,7 +254,8 @@ export class TableRoller extends GenericFileRoller<string> {
         }
 
         this.loaded = true;
-        this.trigger("loaded");
+        // JYC - moved in load()
+        // this.trigger("loaded");
     }
     toResult() {
         return {
