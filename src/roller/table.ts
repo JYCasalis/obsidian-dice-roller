@@ -28,6 +28,11 @@ export class TableRoller extends GenericFileRoller<string> {
             .trim()
             .toLowerCase();
         this.header = header;
+
+        console.log("this.path[", this.path, "]");
+        console.log("this.block[", this.block, "]");
+        console.log("this.header[", this.header, "]");
+
     }
     get tooltip() {
         return `${this.formulaStack}\n${this.rolledStack}`;
@@ -39,7 +44,7 @@ export class TableRoller extends GenericFileRoller<string> {
     async build() {
         console.log("***** Entering TableRoller build with result:", this.result, "*****");
 
-        this.formulaStack = this.original;
+        this.formulaStack = this.original?.trim();
         if (this.lookupRoller) {
             this.rolledStack = `[${this.lookupRoller.result}^${this.block}${this.header ? " | " + this.header : ""}] `;
         }
