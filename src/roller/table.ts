@@ -12,7 +12,8 @@ export class TableRoller extends GenericFileRoller<string> {
     isLookup: any;
     lookupRoller: StackRoller;
     lookupRanges: [range: [min: number, max: number], option: string][];
-    nestedTooltip: string;
+    formulaStack: string = "";
+    rolledStack: string = "";
     rolledRowNumbers: string;
     getPath() {
         const { groups } = this.lexeme.value.match(TABLE_REGEX);
@@ -29,7 +30,7 @@ export class TableRoller extends GenericFileRoller<string> {
         this.header = header;
     }
     get tooltip() {
-        return `${this.original}\n${this.nestedTooltip}${this.header ? " | " + this.header : ""}`;
+        return `${this.formulaStack}\n${this.rolledStack}`;
     }
     get replacer() {
         return this.result;
@@ -38,11 +39,12 @@ export class TableRoller extends GenericFileRoller<string> {
     async build() {
         console.log("***** Entering TableRoller build with result:", this.result, "*****");
 
+        this.formulaStack = this.original;
         if (this.lookupRoller) {
-            this.nestedTooltip = "[" + this.lookupRoller.result + "^" + this.block + "] > ";
+            this.rolledStack = `[${this.lookupRoller.result}^${this.block}${this.header ? " | " + this.header : ""}] `;
         }
         else {
-            this.nestedTooltip = "[row " + this.rolledRowNumbers + "] > ";
+            this.rolledStack = "[row " + this.rolledRowNumbers + "] ";
         }
 
         let rollerPattern = /(?:\`dice:)(.*?)(?:\`)/;
@@ -51,65 +53,37 @@ export class TableRoller extends GenericFileRoller<string> {
         let i = 0;
 
         while ((foundRoller = this.result.match(rollerPattern)) != null) {
-            console.log("Processing formula #", i, ":", foundRoller[1]);
+            const formula = foundRoller[1].trim();
+
+            console.log("Processing formula #", i, ":", formula);
             console.log("----------------------");
 
-            const formula = foundRoller[1].trim();
-            console.log("Found a diceroller formula:", formula);
-
             // Create a sub roller
-            const subRoller = await this.plugin.getRoller(formula, this.source);    // JYC - Do we need this.source ????
-            console.log("Sub roller created, let's roll it");
+            const subRoller = await this.plugin.getRoller(formula, this.source);
+            await subRoller.roll();
 
-            const rolled = await subRoller.roll();
-            const subResult = subRoller.result;
+            // Aggregate tooltip
+            const [top, bottom] = subRoller.tooltip.split("\n");
+            this.formulaStack += " ~ " + top;
+            this.rolledStack += " ~ " + bottom;
+            console.log("NESTED ==> updated formulaStack:", this.formulaStack);
+            console.log("NESTED ==> updated rolledStack:", this.rolledStack);
 
-            // UPDATE TOOLTIP
-            if (subRoller instanceof TableRoller) {
-                this.nestedTooltip += subRoller.nestedTooltip;
+            // Aggregate result
+            console.log("Updated result from", this.result, "to", this.result.replace(foundRoller[0], subRoller.result));
+            this.result = this.result.replace(foundRoller[0], subRoller.result);
 
-                if (!rolled.match(rollerPattern)) {
-                    this.nestedTooltip += " , ";
-                }
-                console.log("TOOLTIP TableRoller updated:", this.nestedTooltip);
-            }
-            else if (subRoller instanceof StackRoller) {
-                console.log("TOOLTIP for STACK ROLLER. resultText:", subRoller.resultText," vs result:", subRoller.result);
-                if (i == 0) {
-                    this.nestedTooltip += subRoller.resultText;
-                }
-                else {
-                    this.nestedTooltip += " , " + subRoller.resultText;
-                }
-                console.log("TOOLTIP StackRoller updated:", this.nestedTooltip);
-            }
-            else {
-                if (i == 0) {
-                    this.nestedTooltip += subRoller.result;
-                }
-                else {
-                    this.nestedTooltip += " , " + subRoller.result;
-                }
-                console.log("TOOLTIP OTHER Roller updated:", this.nestedTooltip);
-            }
-            // END UPDATE TOOLTIP
-
-            console.log("Updated result from", this.result, "to", this.result.replace(foundRoller[0], subResult));
-            this.result = this.result.replace(foundRoller[0], subResult);
-
+            // TEMP security infinite loop
             i++;
-            if (i > 10) {
-                console.log("EMERGENCY BREAK....");
+            if (i > 20) {
+                console.log("INFINITE LOOP, FORCE EXIT....");
                 break;
             }
         };
 
-        this.nestedTooltip = this.nestedTooltip.replace(/( > $)/, '');
-        this.nestedTooltip = this.nestedTooltip.replace(/( , $)/, '');
-
         console.log("=============================");
         console.log("FINAL RESULT is:", this.result);
-        console.log("FINAL TOOLTIP is:", this.nestedTooltip);
+        console.log("FINAL TOOLTIP is:", this.formulaStack+"\n"+this.rolledStack);
         console.log("=============================");
 
         this.setTooltip();
