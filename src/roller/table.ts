@@ -151,7 +151,6 @@ export class TableRoller extends GenericFileRoller<string> {
     }
     async load() {
         await this.getOptions();
-        this.trigger("loaded"); // JYC - Moved from getOptions
     }
 
     async getOptions() {
@@ -228,8 +227,7 @@ export class TableRoller extends GenericFileRoller<string> {
         }
 
         this.loaded = true;
-        // JYC - moved in load()
-        // this.trigger("loaded");
+        this.trigger("loaded");
     }
     toResult() {
         return {
