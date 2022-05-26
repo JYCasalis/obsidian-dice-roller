@@ -12,6 +12,8 @@ export const LINK_REGEX =
 
 export const TABLE_REGEX =
     /(?:\d+[Dd])?(?:\[.*\]\(|\[\[)(?:.+?)#?\^(?:.+?)(?:\)|\]\])\|?(?:.+)?/u;
+export const TABLE_REGEX_JYC =
+    /(?:.*)?(?:\[.*\]\(|\[\[)(?:.+?)#?\^(?:.+?)(?:\)|\]\])\|?(?:.+)?/u;
 export const SECTION_REGEX =
     /(?:\d+[Dd])?(?:\[.*\]\(|\[\[)(?:.+)(?:\)|\]\])\|?(?:.+)?/u;
 export const LINE_REGEX =
@@ -30,7 +32,8 @@ export interface LexicalToken extends moo.Token {
 export default class Lexer {
     lexer = moo.compile({
         WS: [{ match: /[ \t]+/u }, { match: /[{}]+/u }],
-        table: TABLE_REGEX,
+        // table: TABLE_REGEX,
+        table: TABLE_REGEX_JYC,
         line: LINE_REGEX,
         section: SECTION_REGEX,
         link: LINK_REGEX,

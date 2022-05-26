@@ -1,4 +1,4 @@
-import { MarkdownRenderer, Pos } from "obsidian";
+import { MarkdownRenderer, Notice, Pos } from "obsidian";
 
 import { TABLE_REGEX } from "src/utils/constants";
 import { StackRoller } from ".";
@@ -9,23 +9,35 @@ class SubRollerResult {
     combinedTooltip: string;
 }
 
+// To be moved in constants (?)
+const TABLE_REGEX_JYC =
+    /(?<roll>.*)?(?:\[.*\]\(|\[\[)(?<link>.+?)#?\^(?<block>.+?)(?:\]\]|\))(?:\|(?<header>.+))?/
+
 export class TableRoller extends GenericFileRoller<string> {
     content: string;
     position: Pos;
     block: string;
     header: string;
+    rollsFormula: string;
     isLookup: any;
     lookupRoller: StackRoller;
     lookupRanges: [range: [min: number, max: number], option: string][];
     combinedTooltip: string = "";
     prettyTooltip: string = "";
     getPath() {
-        const { groups } = this.lexeme.value.match(TABLE_REGEX);
+        const { groups } = this.lexeme.value.match(TABLE_REGEX_JYC);
+        // const { groups } = this.lexeme.value.match(TABLE_REGEX);
 
-        const { roll = 1, link, block, header } = groups;
+        // const { roll = 1, link, block, header } = groups;
+        const { roll, link, block, header } = groups;
         if (!link || !block) throw new Error("Could not parse link.");
+        this.rollsFormula = roll;
+        console.log("EXTRACTED ROLL formula:", roll);
 
-        this.rolls = (roll && !isNaN(Number(roll)) && Number(roll)) ?? 1;
+        // this.rolls = (roll && !isNaN(Number(roll)) && Number(roll)) ?? 1;
+
+        this.rolls = 1;
+
         this.path = decodeURIComponent(link.replace(/(\[|\]|\(|\))/g, ""));
         this.block = block
             .replace(/(\^|#)/g, "")
@@ -53,7 +65,6 @@ export class TableRoller extends GenericFileRoller<string> {
             null
         );
     }
-
     // Quick and Dirty
     // TODO: to be refactored (using regex maybe?)
     prettify(input: string): string {
@@ -133,14 +144,42 @@ export class TableRoller extends GenericFileRoller<string> {
 
     async getResult() {
         let res = [];
-
         let subTooltips: string[] = [];
+        let myFormula = this.original;
+
+        console.log("My formula:", myFormula);
+
+        // TODO Issue #82 allow roll to be a dice formula !
+        if (this.rollsFormula) {
+            const roller = await this.plugin.getRoller(this.rollsFormula, this.source);
+            console.log("roller:", roller);
+            if (!(roller instanceof StackRoller)) {
+                this.prettyTooltip = "TableRoller only supports dice rolls to select multiple elements.";
+                new Notice(this.prettyTooltip);
+                return("ERROR");
+            }
+            try {
+                const rollsRoller = roller as StackRoller;
+                await rollsRoller.roll();
+                this.rolls = rollsRoller.result;
+                console.log("ROLLED NB OF ROLLS:", this.rolls);
+                if (!rollsRoller.isStatic) {
+                    myFormula = myFormula.replace(this.rollsFormula, `${this.rollsFormula} --> [${this.rolls}] `);
+                }
+            }
+            catch(error) {
+                this.prettyTooltip = `TableRoller: '${this.rollsFormula}' is not a valid dice roll.`;
+                new Notice(this.prettyTooltip);
+                return("ERROR");
+            }
+        }
 
         for (let i = 0; i < this.rolls; i++) {
             let subTooltip:string;
             let subResult: SubRollerResult;
             let selectedOption:string;
 
+            // Get selected option
             if (this.isLookup) {
                 const result = await this.lookupRoller.roll();
                 const option = this.lookupRanges.find(
@@ -162,6 +201,7 @@ export class TableRoller extends GenericFileRoller<string> {
                 selectedOption = options[randomRowNumber];
             }
 
+            // Get subResult for selected option
             subResult = await this.getSubResult(selectedOption);
             res.push(subResult.result);
 
@@ -173,13 +213,16 @@ export class TableRoller extends GenericFileRoller<string> {
 
         // TODO: find a simpler way
         if (subTooltips.length == 0) {
-            this.combinedTooltip = this.original;
+            this.combinedTooltip = myFormula;
+            // this.combinedTooltip = this.original;
         }
         else if (subTooltips.length == 1) {
-            this.combinedTooltip = this.original + " " + subTooltips.join("");
+            this.combinedTooltip = myFormula + " " + subTooltips.join("");
+            // this.combinedTooltip = this.original + " " + subTooltips.join("");
         }
         else {
-            this.combinedTooltip = this.original + " ==> (" + subTooltips.join(" ||") + ")";
+            this.combinedTooltip = myFormula + " ==> (" + subTooltips.join(" ||") + ")";
+            // this.combinedTooltip = this.original + " ==> (" + subTooltips.join(" ||") + ")";
         }
 
         this.prettyTooltip = this.prettify(this.combinedTooltip);
