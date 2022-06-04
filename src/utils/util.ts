@@ -63,3 +63,41 @@ export function _insertIntoMap(
     /** Insert the new value at the specified index */
     map.set(index, value);
 }
+
+export function prettify(input: string): string {
+    const specialChars = /(.*?)(\(|\)|;|\|\|)(.*)/
+    const tab = "\t";
+    let tabCount = 0;
+    let output:string = "";
+
+    let remaining:string = input;
+    let matches: RegExpMatchArray;
+    while (matches = remaining.match(specialChars)) {
+        let [, beforeSpecial, special, afterSpecial] = matches;
+        output += beforeSpecial;
+        if (special == ")") {
+            tabCount--;
+            output += "\n";
+            output += tab.repeat(tabCount);
+            output += ")";
+        }
+        else {
+            if (special == "(") {
+                tabCount++;
+                output += "(";
+            }
+            else if (special == ";") {
+                output += ",";
+            }
+            else if (special == "||") {
+                output += "||";
+            }
+            output += "\n"
+            output += tab.repeat(tabCount);
+        }
+        remaining = afterSpecial;
+    }
+    output += remaining;
+
+    return output;
+}

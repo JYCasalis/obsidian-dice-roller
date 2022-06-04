@@ -3,15 +3,12 @@ import { MarkdownRenderer, Notice, Pos } from "obsidian";
 import { TABLE_REGEX } from "src/utils/constants";
 import { StackRoller } from ".";
 import { GenericFileRoller } from "./roller";
+import { prettify } from "src/utils/util";
 
 class SubRollerResult {
     result: string;
     combinedTooltip: string;
 }
-
-// To be moved in constants (?)
-const TABLE_REGEX_JYC =
-    /(?<roll>.*)?(?:\[.*\]\(|\[\[)(?<link>.+?)#?\^(?<block>.+?)(?:\]\]|\))(?:\|(?<header>.+))?/
 
 export class TableRoller extends GenericFileRoller<string> {
     content: string;
@@ -25,16 +22,21 @@ export class TableRoller extends GenericFileRoller<string> {
     combinedTooltip: string = "";
     prettyTooltip: string = "";
     getPath() {
-        const { groups } = this.lexeme.value.match(TABLE_REGEX_JYC);
-        // const { groups } = this.lexeme.value.match(TABLE_REGEX);
+        const { groups } = this.lexeme.value.match(TABLE_REGEX);
 
-        // const { roll = 1, link, block, header } = groups;
-        const { roll, link, block, header } = groups;
+        const { diceRoll="1", link, block, header } = groups;
         if (!link || !block) throw new Error("Could not parse link.");
-        this.rollsFormula = roll;
-        console.log("EXTRACTED ROLL formula:", roll);
 
-        // this.rolls = (roll && !isNaN(Number(roll)) && Number(roll)) ?? 1;
+        // For backward compatiblity: xd transformed into x (instead of xd100)
+        const matches = diceRoll.match(/(\d*?)[Dd]$/);
+        // console.log("Matching diceRoll:", matches);
+        if (matches) {
+            const [, nbRolls = "1", ] = matches;
+            this.rollsFormula = nbRolls;
+        }
+        else {
+            this.rollsFormula = diceRoll;
+        }
 
         this.rolls = 1;
 
@@ -65,41 +67,6 @@ export class TableRoller extends GenericFileRoller<string> {
             null
         );
     }
-    // Quick and Dirty
-    // TODO: to be refactored (using regex maybe?)
-    prettify(input: string): string {
-        let tab = "\t";
-
-        let tabCount = 0;
-        let output:string = "";
-
-        for (let i = 0; i < input.length; i++) {
-            if (input.charAt(i) == "(") {
-                tabCount++;
-                output += "(\n";
-                output += tab.repeat(tabCount);
-            }
-            else if (input.charAt(i) == ")") {
-                tabCount--;
-                output += "\n";
-                output += tab.repeat(tabCount);
-                output += ")";
-            }
-            else if (input.charAt(i) == ";") {
-                output += ",\n";
-                output += tab.repeat(tabCount);
-            }
-            else if (input.charAt(i) == "|" && input.charAt(i-1) == "|") {
-                output += "|\n";
-                output += tab.repeat(tabCount);
-            }
-            else {
-                output += input.charAt(i);
-            }
-        }
-        return output;
-    }
-
     async getSubResult(input: string): Promise<SubRollerResult> {
         let res: SubRollerResult = new SubRollerResult();
         res.result = input;
@@ -145,26 +112,22 @@ export class TableRoller extends GenericFileRoller<string> {
     async getResult() {
         let res = [];
         let subTooltips: string[] = [];
-        let myFormula = this.original;
+        let formula = this.original;
 
-        console.log("My formula:", myFormula);
-
-        // TODO Issue #82 allow roll to be a dice formula !
         if (this.rollsFormula) {
-            const roller = await this.plugin.getRoller(this.rollsFormula, this.source);
-            console.log("roller:", roller);
-            if (!(roller instanceof StackRoller)) {
-                this.prettyTooltip = "TableRoller only supports dice rolls to select multiple elements.";
-                new Notice(this.prettyTooltip);
-                return("ERROR");
-            }
             try {
+                const roller = await this.plugin.getRoller(this.rollsFormula, this.source);
+                if (!(roller instanceof StackRoller)) {
+                    this.prettyTooltip = "TableRoller only supports dice rolls to select multiple elements.";
+                    new Notice(this.prettyTooltip);
+                    return("ERROR");
+                }
+
                 const rollsRoller = roller as StackRoller;
                 await rollsRoller.roll();
                 this.rolls = rollsRoller.result;
-                console.log("ROLLED NB OF ROLLS:", this.rolls);
                 if (!rollsRoller.isStatic) {
-                    myFormula = myFormula.replace(this.rollsFormula, `${this.rollsFormula} --> [${this.rolls}] `);
+                    formula = formula.replace(this.rollsFormula, `${this.rollsFormula} --> ${rollsRoller.resultText} > `);
                 }
             }
             catch(error) {
@@ -175,7 +138,7 @@ export class TableRoller extends GenericFileRoller<string> {
         }
 
         for (let i = 0; i < this.rolls; i++) {
-            let subTooltip:string;
+            let subTooltip:string = "";
             let subResult: SubRollerResult;
             let selectedOption:string;
 
@@ -195,8 +158,6 @@ export class TableRoller extends GenericFileRoller<string> {
             else {
                 const options = [...this.options];
                 const randomRowNumber = this.getRandomBetween(0, options.length - 1);
-                // TODO: to be confirmed (was this to forbid rolling the same result twice ?)
-                // options.splice(options.indexOf(option), 1);
                 subTooltip = options.length + " rows" + " --> " + "[row " + (randomRowNumber+1) + "]";
                 selectedOption = options[randomRowNumber];
             }
@@ -213,19 +174,16 @@ export class TableRoller extends GenericFileRoller<string> {
 
         // TODO: find a simpler way
         if (subTooltips.length == 0) {
-            this.combinedTooltip = myFormula;
-            // this.combinedTooltip = this.original;
+            this.combinedTooltip = formula;
         }
         else if (subTooltips.length == 1) {
-            this.combinedTooltip = myFormula + " " + subTooltips.join("");
-            // this.combinedTooltip = this.original + " " + subTooltips.join("");
+            this.combinedTooltip = formula + " " + subTooltips.join("");
         }
         else {
-            this.combinedTooltip = myFormula + " ==> (" + subTooltips.join(" ||") + ")";
-            // this.combinedTooltip = this.original + " ==> (" + subTooltips.join(" ||") + ")";
+            this.combinedTooltip = formula + " ==> (" + subTooltips.join(" ||") + ")";
         }
 
-        this.prettyTooltip = this.prettify(this.combinedTooltip);
+        this.prettyTooltip = prettify(this.combinedTooltip);
 
         return res.join("||");
     }

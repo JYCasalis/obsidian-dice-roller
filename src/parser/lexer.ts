@@ -143,22 +143,4 @@ export default class Lexer {
         }
         return clone;
     }
-    getTypeFromLexemes(lexemes: Lexeme[]) {
-        if (lexemes.some(({ type }) => type === "table")) {
-            return "table";
-        }
-        if (lexemes.some(({ type }) => type === "section")) {
-            return "section";
-        }
-        if (lexemes.some(({ type }) => type === "tag")) {
-            return "tag";
-        }
-        if (lexemes.some(({ type }) => type === "link")) {
-            return "link";
-        }
-        if (lexemes.some(({ type }) => type === "line")) {
-            return "line";
-        }
-        return "dice";
-    }
 }

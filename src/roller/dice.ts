@@ -2,8 +2,9 @@ import { Notice } from "obsidian";
 import type DiceRollerPlugin from "src/main";
 import { LexicalToken } from "src/parser/lexer";
 import { ResultMapInterface, Conditional, Round, ExpectedValue } from "src/types";
-import { _insertIntoMap } from "src/utils/util";
-import { GenericRoller } from "./roller";
+import { _insertIntoMap, prettify } from "src/utils/util";
+import { GenericRoller, BasicRoller } from "./roller";
+import { TableRoller } from "./table";
 
 interface Modifier {
     conditionals: Conditional[];
@@ -524,6 +525,138 @@ export class PercentRoller extends DiceRoller {
     }
     allowAverage() : boolean {
         return false;
+    }
+}
+
+export class MultiRoller extends GenericRoller<string> {
+    rollers: BasicRoller[];
+    result: string;
+    private _waitToBeLoaded: number;
+    private _tooltipValue: string;
+    init: Promise<void>;
+
+    async createRollers(content: string) {
+        this._waitToBeLoaded = 0;
+
+        console.log("CreateRollers for", content);
+        const stacks = content.split(";");
+
+        console.log("Found following stacks:", stacks);
+
+        let rollers = stacks.map(async (stack) => {
+            console.log("Creating a roller for ", stack);
+
+            // Force no dice icon for sub rollers
+            const roller = this.plugin.getRoller(stack, this.source, false);
+
+            console.log("Roller is", roller);
+            return roller;
+        });
+
+        console.log("Waiting for rollers to be created from promises:", rollers);
+        this.rollers = await Promise.all(rollers);
+        console.log("Rollers created:", this.rollers);
+
+        this.rollers.map((roller) => {
+            if (!roller.loaded) {
+                console.log("One roller not yet loaded:", roller);
+                this._waitToBeLoaded++;
+                roller.on("loaded", () => this.rollerLoaded());
+            }
+        });
+
+        this.loaded = this._waitToBeLoaded === 0;
+        console.log("Rollers creation COMPLETED");
+    }
+
+    constructor(
+        public plugin: DiceRollerPlugin,
+        public source: string,
+        public original: string,
+        showDice = plugin.data.showDice
+    ) {
+        // TODO je sais pas pkoi on passe les lexemes, ils ne sont pas utilisés par les classes parentes !!
+        super(plugin, original, [], showDice);
+
+        // TODO utiliser les flags pour moi-même si nécessaire...
+        this.init = this.createRollers(original);
+    }
+
+    private rollerLoaded() {
+        this._waitToBeLoaded--;
+        if (this._waitToBeLoaded < 1) {
+            this.trigger("loaded");
+            this.loaded = true;
+        }
+    }
+
+    get tooltip(): string {
+        return this._tooltipValue;
+    }
+    computeTooltip()
+    {
+        let tooltips = this.rollers.map((roller) => {
+            // TODO: retravailler cette histoire de tooltip non ?
+            if (roller instanceof TableRoller) {
+                console.log("TableRoller tooltip:", roller.tooltip);
+                console.log("TableRoller combinedTooltip:", roller.combinedTooltip);
+                return roller.combinedTooltip;
+            }
+            else {
+                console.log("StackRoller tooltip:", roller.tooltip);
+                console.log("Changed into:", roller.tooltip.split("\n").join(" --> "));
+                return roller.tooltip.split("\n").join(" --> ");
+            }
+        });
+        this._tooltipValue = prettify(tooltips.join(" ;"));
+    }
+    async build(): Promise<void> {
+        this.resultEl.setText(this.result);
+    }
+    async roll(): Promise<any> {
+        console.log("MULTISTACK - roll following rollers", this.rollers);
+
+        let rolls = this.rollers.map(async (roller) => roller.roll());
+        await Promise.all(rolls);
+
+        console.log("MULTISTACK - rollers rolled, gathering results now");
+
+        let rolledResults = this.rollers.map((roller) => roller.resultEl.getText());
+        this.result = rolledResults.join(", ");
+
+        console.log("MULTISTACK - results gathered", this.result);
+
+        this.computeTooltip();
+
+        console.log("MULTISTACK - tooltip computed");
+
+        this.render();
+        this.trigger("new-result");
+
+        console.log("MULTISTACKK - roll - result:", this.result);
+        return this.result;
+    }
+    toResult()
+    {
+        return {
+            type: "multidice",
+            result: this.result,
+            tooltip: this.tooltip
+        };
+    }
+    async applyResult(result: any): Promise<void>
+    {
+        if (result.type !== "multidice") return;
+        if (result.result) {
+            this.result = result.result;
+        }
+        if (result.tooltip) {
+            this._tooltipValue = result.tooltip;
+        }
+        await this.render();
+    }
+    get replacer() {
+        return `${this.result}`;
     }
 }
 

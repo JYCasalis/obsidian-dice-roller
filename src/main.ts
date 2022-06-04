@@ -24,7 +24,8 @@ import {
     SectionRoller,
     TagRoller,
     LinkRoller,
-    LineRoller
+    LineRoller,
+    MultiRoller
 } from "./roller";
 
 import SettingTab from "./settings/settings";
@@ -260,6 +261,9 @@ export default class DiceRollerPlugin extends Plugin {
 
                 const toPersist: Record<number, BasicRoller> = {};
 
+                let fileContent: string[];
+                let replacementFound: boolean = false;
+                const modPromises: Promise<void>[] = [];
                 for (let index = 0; index < nodeList.length; index++) {
                     const node = nodeList.item(index);
 
@@ -268,6 +272,13 @@ export default class DiceRollerPlugin extends Plugin {
                         info
                     ) {
                         try {
+                            if (!replacementFound) {
+                                fileContent = (
+                                        await this.app.vault.cachedRead(file)
+                                    ).split("\n");
+                                replacementFound = true;
+                            }
+
                             let [full, content] = node.innerText.match(
                                 /^dice\-mod:\s*([\s\S]+)\s*?/
                             );
@@ -289,41 +300,39 @@ export default class DiceRollerPlugin extends Plugin {
                                 ctx.sourcePath
                             );
 
-                            roller.on("new-result", async () => {
-                                const fileContent = (
-                                    await this.app.vault.cachedRead(file)
-                                ).split("\n");
-                                let splitContent = fileContent.slice(
-                                    info.lineStart,
-                                    info.lineEnd + 1
-                                );
-                                const replacer = roller.replacer;
-                                if (!replacer) {
-                                    new Notice(
-                                        "Dice Roller: There was an issue modifying the file."
-                                    );
-                                    return;
-                                }
-                                const rep = showFormula
-                                    ? `${roller.inlineText} **${replacer}**`
-                                    : `${replacer}`;
+                            modPromises.push(
+                                new Promise((resolve, reject) => {
+                                    roller.on("new-result", async () => {
+                                        let splitContent = fileContent.slice(
+                                            info.lineStart,
+                                            info.lineEnd + 1
+                                        );
+                                        const replacer = roller.replacer;
+                                        if (!replacer) {
+                                            new Notice(
+                                                "Dice Roller: There was an issue modifying the file."
+                                            );
+                                            return;
+                                        }
+                                        const rep = showFormula
+                                            ? `${roller.inlineText} **${replacer}**`
+                                            : `${replacer}`;
 
-                                splitContent = splitContent
-                                    .join("\n")
-                                    .replace(`\`${full}\``, rep)
-                                    .split("\n");
+                                        splitContent = splitContent
+                                            .join("\n")
+                                            .replace(`\`${full}\``, rep)
+                                            .split("\n");
 
-                                fileContent.splice(
-                                    info.lineStart,
-                                    info.lineEnd - info.lineStart + 1,
-                                    ...splitContent
-                                );
+                                        fileContent.splice(
+                                            info.lineStart,
+                                            info.lineEnd - info.lineStart + 1,
+                                            ...splitContent
+                                        );
+                                        resolve();
+                                    });
+                                })
+                            );
 
-                                await this.app.vault.modify(
-                                    file,
-                                    fileContent.join("\n")
-                                );
-                            });
                             await roller.roll();
 
                             continue;
@@ -416,6 +425,11 @@ export default class DiceRollerPlugin extends Plugin {
                         );
                         continue;
                     }
+                }
+
+                if (replacementFound && modPromises.length) {
+                    await Promise.all(modPromises);
+                    await this.app.vault.modify(file, fileContent.join("\n"));
                 }
 
                 if (path in this.data.results) {
@@ -631,12 +645,42 @@ export default class DiceRollerPlugin extends Plugin {
 
         return new RegExp(`(${fields.join("|")})`, "g");
     }
+    async getMultiRoller(
+        content: string,
+        source: string,
+        icon: boolean): Promise<BasicRoller>
+    {
+        console.log("MULTIDICE identified! Creating a MultiRoller");
+
+        let showDice = content.includes("||nodice") ? false : icon;
+        content = content
+            .replace("||nodice", "");
+
+        // Seul le nodice est géré pour le moment
+        // TODO: ajouter shouldRender en optionnel et, si fourni, le transmettre aux sous rollers créés
+        // TODO: ajouter showFormula en optionnel et, si fourni, le transmettre aux sous rollers créés
+
+        const roller = new MultiRoller(
+            this,
+            source,
+            content,
+            showDice
+        );
+        await roller.init;
+        return roller;
+    }
+
     async getRoller(
         content: string,
         source: string,
         icon = this.data.showDice
     ): Promise<BasicRoller> {
         content = content.replace(/\\\|/g, "|");
+
+        // TODO: meilleur test?
+        if (content.includes(";")) {
+            return this.getMultiRoller(content, source, icon);
+        }
 
         let showDice = content.includes("|nodice") ? false : icon;
         let shouldRender = this.data.renderAllDice;
